@@ -29,7 +29,10 @@ import re
 
 #os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-#logging.basicConfig(level=logging.DEBUG)
+#import logging
+#logger = logging.getLogger("Testing_Model")
+#logger.setLevel(logging.INFO)
+
 
 #config = tf.ConfigProto()
 #config.gpu_options.allow_growth = True
@@ -53,7 +56,7 @@ def load_glove():
         values = line.split()
         word = values[0]
         coefs = np.asarray(values[1:], dtype='float32')
-        embeddings_index[word] = coefs
+        embeddings_index[word] = coefs 
     f.close()
     return embeddings_index
 
@@ -115,9 +118,6 @@ def read_input():
 
     return input_texts, target_texts, target_counter
 
-
-# In[ ]:
-
 def get_target(self):
    
     target_word2idx = dict()   
@@ -162,7 +162,7 @@ def generate_batch(input_word2em_data, output_text_data, self):
     num_batches = len(input_word2em_data) // BATCH_SIZE
     print("context:: \n", self.context)
     print("len of input data :: ", len(input_word2em_data))
-    print("num of batches :: \n", num_batches)
+    print("num of batches :: ", num_batches)
     
     while True:
         for batchIdx in range(0, num_batches):
@@ -184,6 +184,11 @@ def generate_batch(input_word2em_data, output_text_data, self):
                     if idx > 0:
                         decoder_target_data_batch[lineIdx, idx - 1, w2idx] = 1
             yield [encoder_input_data_batch, decoder_input_data_batch], decoder_target_data_batch
+
+
+
+# In[ ]:
+
 
 
 
@@ -228,20 +233,29 @@ class CornellWordGloveChatBot(object):
         self.max_decoder_seq_length = self.context['decoder_max_seq_length']
         self.num_decoder_tokens = self.context['num_decoder_tokens']
 
-        print(self.context)
+        print("context: ",self.context)
         
         encoder_inputs = Input(shape=(None, GLOVE_EMBEDDING_SIZE), name='encoder_inputs')
-        encoder_lstm = LSTM(units=HIDDEN_UNITS, return_state=True, name="encoder_lstm")
-        encoder_outputs, encoder_state_h, encoder_state_c = encoder_lstm(encoder_inputs)
+        encoder_lstm1 = LSTM(units=HIDDEN_UNITS, return_state=True, return_sequences=True, name="encoder_lstm1")
+        #logger.info("Added LSTM Layer")
+
+        encoder_lstm2 = LSTM(units=HIDDEN_UNITS, return_state=True,  name="encoder_lstm2")
+        #encoder_lstm3 = LSTM(units=HIDDEN_UNITS, return_state=True, name="encoder_lstm3")
+        
+        x = encoder_lstm1(encoder_inputs)
+        
+        encoder_outputs, encoder_state_h, encoder_state_c = encoder_lstm2(x)
+        
         encoder_states = [encoder_state_h, encoder_state_c]
 
         decoder_inputs = Input(shape=(None, GLOVE_EMBEDDING_SIZE), name='decoder_inputs')
-        decoder_lstm = LSTM(units=HIDDEN_UNITS, return_sequences=True, return_state=True, name='decoder_lstm')
+        decoder_lstm = LSTM(units=HIDDEN_UNITS, return_sequences=True, return_state=True, name='decoder_lstm', dropout=0.2)
         decoder_outputs, _, _ = decoder_lstm(decoder_inputs, initial_state=encoder_states)
         decoder_dense = Dense(self.num_decoder_tokens, activation='softmax', name='decoder_dense')
         decoder_outputs = decoder_dense(decoder_outputs)
 
         self.model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
+        print(self.model.summary())
         
         #plot_model(self.model, to_file='RNN_model.png', show_shapes=True)
         
@@ -267,13 +281,17 @@ class CornellWordGloveChatBot(object):
         self.model.save_weights(WEIGHT_FILE_PATH)
                 
         self.encoder_model = Model(encoder_inputs, encoder_states)
+        #plot_model(self.encoder_model, to_file='RNN_encoder_model.png', show_shapes=True)
+        
         
         decoder_state_inputs = [Input(shape=(HIDDEN_UNITS,)), Input(shape=(HIDDEN_UNITS,))]
         decoder_outputs, state_h, state_c = decoder_lstm(decoder_inputs, initial_state=decoder_state_inputs)
         decoder_states = [state_h, state_c]
         decoder_outputs = decoder_dense(decoder_outputs)
         self.decoder_model = Model([decoder_inputs] + decoder_state_inputs, [decoder_outputs] + decoder_states)
+        #plot_model(self.decoder_model, to_file='RNN_decoder_model.png', show_shapes=True)
 
+        
     def reply(self, input_text):
         input_seq = []
         input_emb = []
@@ -281,24 +299,18 @@ class CornellWordGloveChatBot(object):
         
         for word in nltk.word_tokenize(input_text.lower()):
             
-            #if not in_white_list(word):
-            #    continue
             emb = np.zeros(shape=GLOVE_EMBEDDING_SIZE)
             if word in self.word2em:
                 emb = self.word2em[word]
             input_emb.append(emb)
+            
         input_seq.append(input_emb)
-        #print("word embedding:: \n\n ", input_seq)
-        
         input_seq = pad_sequences(input_seq, self.max_encoder_seq_length)
-        #print("word embedding after padding length :: \n\n ", input_seq.shape)
-        #print("word embedding after padding :: \n\n ", input_seq)
                
         states_value = self.encoder_model.predict(input_seq)
         target_seq = np.zeros((1, 1, GLOVE_EMBEDDING_SIZE))
         target_seq[0, 0, :] = self.word2em['start']
         
-        #print("target seq :: \n\n ", target_seq)
         target_text = ''
         target_text_len = 0
         terminated = False
@@ -306,19 +318,16 @@ class CornellWordGloveChatBot(object):
             
             output_tokens, h, c = self.decoder_model.predict([target_seq] + states_value)
             print("output tokens shape  :: \n\n ", output_tokens.shape)
-            #print("output tokens  :: \n\n ", output_tokens)
             
             sample_token_idx = np.argmax(output_tokens[0, -1, :])
             
-            #print(sample_token_idx)
             sample_word = self.target_idx2word[sample_token_idx]
             target_text_len += 1
         
-            #print('target_text_len::  ', target_text_len)
             if sample_word != 'start' and sample_word != 'end':
                 print("sample word :: ", sample_word)
                 target_text += ' ' + sample_word
-
+            
             if sample_word == 'end' or target_text_len >= self.max_decoder_seq_length:
                 terminated = True
 
@@ -341,27 +350,32 @@ def main():
 
     model = CornellWordGloveChatBot()
     model.test_run()
-
+    
 if __name__ == '__main__':
     
-    MAX_VOCAB_SIZE = 10000
+    MAX_VOCAB_SIZE = 20000
     BATCH_SIZE = 64
     NUM_EPOCHS = 1
     GLOVE_EMBEDDING_SIZE = 100
-    HIDDEN_UNITS = 64
+    HIDDEN_UNITS = 128
     MAX_INPUT_SEQ_LENGTH = 300
-    MAX_TARGET_SEQ_LENGTH = 150
+    MAX_TARGET_SEQ_LENGTH = 100
     
     DATA_SET_NAME = 'cornell'
     DATA = 'D:/CBA/Sessions/Capstone/Data/ReviewResponseData2.csv'
     DATA_PATH = 'movie_lines_cleaned_10k.txt'
     
-    #GLOVE_MODEL = "very_large_data/glove.6B." + str(GLOVE_EMBEDDING_SIZE) + "d.txt"
+    
     WHITELIST = 'abcdefghijklmnopqrstuvwxyz1234567890?.,'
     WEIGHT_FILE_PATH = 'D:/CBA/Sessions/Capstone/Data/word-glove-weights.h5'
     
     main()
     
+
+
+# In[ ]:
+
+
 
 
 # In[ ]:
